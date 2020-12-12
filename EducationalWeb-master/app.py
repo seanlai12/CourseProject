@@ -1,6 +1,7 @@
 import sys
 import os
-import json 
+import json
+import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask,jsonify
@@ -34,6 +35,8 @@ MAX_HIST = 50
 
 IS_LOCAL_SRV = True 
 
+SLIDE_BUFFER_SIZE = 5
+SLIDE_BUFFER_LIST = []
 
 def crossdomain(origin=None, methods=None, headers=None, max_age=21600,
                 attach_to_all=True, automatic_options=True):
@@ -136,17 +139,53 @@ def resolve_slide(course_name,lno,type_,slide_name=None,log=False,action=None):
 	elif type_ == 'related' or type_=='search_results':
 		ret = model.get_slide(course_name,slide_name,lno)
 	elif type_ == 'next':
-		ret = model.get_next_slide(course_name,lno,slide_name)
+		ret = model.get_next_slide(course_name, lno, slide_name)
 	elif type_ == 'prev':
 		ret = model.get_prev_slide(course_name,lno,slide_name)
 	if log:
 		if ret[0] is not None:
-			print ('logging ', ret[0])
 			model.log(request.remote_addr,ret[0],datetime.datetime.now(),action)
 		else:
 			model.log(request.remote_addr,'End',datetime.datetime.now(),action)
 	return ret 
-	
+
+
+def buffer_next_slides(course_name,lno,curr_slide):
+	while len(SLIDE_BUFFER_LIST) < SLIDE_BUFFER_SIZE:
+		next_slide_name, lno, lec_name, (
+			num_related_slides, related_slides, disp_str, related_course_names, rel_lnos, rel_lec_names, disp_color,
+			disp_snippet), lec_names, lnos, ses_disp_str = resolve_slide(course_name, lno, 'next',
+																		 slide_name=curr_slide)
+		curr_slide = next_slide_name
+		if next_slide_name is not None:
+			vis_urls, vis_strs = get_prev_urls()
+			res = render_template("slide.html", slide_name=next_slide_name, course_name=course_name,
+								  num_related_slides=num_related_slides, related_slides=related_slides, disp_str=disp_str,
+								  disp_color=disp_color, disp_snippet=disp_snippet,
+								  related_course_names=related_course_names, lno=lno, lec_name=lec_name,
+								  lec_names=lec_names, lnos=lnos, course_names=COURSE_NAMES, num_courses=NUM_COURSES,
+								  rel_lnos=rel_lnos, rel_lec_names=rel_lec_names, vis_urls=vis_urls, vis_strs=vis_strs,
+								  num_vis=NUM_VIS)
+		else:
+			return render_template("end.html", course_names=COURSE_NAMES, num_courses=NUM_COURSES, vis_urls=vis_urls,
+								   vis_strs=vis_strs, num_vis=NUM_VIS)
+		res_dict = {'res': res, 'next_slide_name': next_slide_name, 'ses_disp_str': ses_disp_str, 'vis_urls': vis_urls, 'vis_strs': vis_strs, 'course_name': course_name, 'lno': lno}
+		SLIDE_BUFFER_LIST.append(res_dict)
+
+
+@app.route('/next_slide/<course_name>/<lno>/<curr_slide>')
+def next_slide(course_name,lno,curr_slide):
+	global NUM_VIS
+	if len(SLIDE_BUFFER_LIST) == 0:
+		buffer_next_slides(course_name, lno, curr_slide)
+
+	last_res = SLIDE_BUFFER_LIST[-1]
+	curr_res = SLIDE_BUFFER_LIST.pop(0)
+	ses_disp_str = curr_res['ses_disp_str']
+	set_sess(request.url,ses_disp_str)
+	return curr_res['res'], buffer_next_slides(last_res['course_name'], last_res['lno'], last_res['next_slide_name'])
+
+
 @app.route('/slide/<course_name>/<lno>')
 def slide(course_name,lno):
 	global NUM_VIS
@@ -171,24 +210,6 @@ def related_slide(course_name,slide_name,lno):
 
 	return render_template("slide.html",slide_name=next_slide_name,course_name=course_name,num_related_slides=num_related_slides,related_slides = related_slides,disp_str=disp_str,disp_color=disp_color,disp_snippet=disp_snippet,related_course_names=related_course_names,lno=lno,lec_name=lec_name,lec_names=lec_names,lnos=lnos,course_names=COURSE_NAMES,num_courses=NUM_COURSES,rel_lnos=rel_lnos,rel_lec_names=rel_lec_names,vis_urls=vis_urls,vis_strs=vis_strs,num_vis=NUM_VIS)
 
-
-
-@app.route('/next_slide/<course_name>/<lno>/<curr_slide>')
-def next_slide(course_name,lno,curr_slide):
-	global NUM_VIS
-	next_slide_name,lno,lec_name,(num_related_slides,related_slides,disp_str,related_course_names,rel_lnos,rel_lec_names,disp_color,disp_snippet),lec_names,lnos,ses_disp_str = resolve_slide(course_name,lno,'next',slide_name=curr_slide)
-
-	vis_urls,vis_strs = get_prev_urls()
-
-
-	if next_slide_name is not None:
-		set_sess(request.url,ses_disp_str)
-
-
-	if next_slide_name is not None:
-		return render_template("slide.html",slide_name=next_slide_name,course_name=course_name,num_related_slides=num_related_slides,related_slides = related_slides,disp_str=disp_str,disp_color=disp_color,disp_snippet=disp_snippet,related_course_names=related_course_names,lno=lno,lec_name=lec_name,lec_names=lec_names,lnos=lnos,course_names=COURSE_NAMES,num_courses=NUM_COURSES,rel_lnos=rel_lnos,rel_lec_names=rel_lec_names,vis_urls=vis_urls,vis_strs=vis_strs,num_vis=NUM_VIS )
-	else:
-		return render_template("end.html",course_names=COURSE_NAMES,num_courses=NUM_COURSES,vis_urls=vis_urls,vis_strs=vis_strs,num_vis=NUM_VIS)
 
 @app.route('/prev_slide/<course_name>/<lno>/<curr_slide>')
 def prev_slide(course_name,lno,curr_slide):
@@ -224,7 +245,7 @@ def value_changed():
 def socket_connection(course_name=None, lno=None, slide_name=None, curr_slide=None):
 
 	search_string = request.json['searchString']
-	socketio.emit('message', search_string,broadcast=True)   
+	socketio.emit('message', search_string,broadcast=True)
 	print(request,search_string)
 	# model.log(request.remote_addr,search_string,datetime.datetime.now(),'search_query')
 	# num_results,results,disp_strs,search_course_names,lnos, snippets,lec_names = model.get_search_results(search_string)
@@ -290,10 +311,10 @@ def log_helper(action,route):
 
 @app.route('/log_action',methods=['GET', 'POST'])
 def log_action():
-	request_dict = json.loads(request.data)
+	request_dict = json.loads(request.data.decode('utf-8'))
 	action = request_dict['action']
 	route = request_dict['route']
-	log_helper(action,route)
+	#log_helper(action,route)
 	resp = jsonify(success=True)
 	
 	return resp 
